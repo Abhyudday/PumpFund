@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Funds collection - public read, admin write only
+    match /funds/{fundId} {
+      // Anyone can read funds
+      allow read: if true;
+      
+      // Only authenticated admin users can write
+      // (you can manage this through Firebase Admin SDK)
+      allow write: if false;
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      // Users can read their own data
+      allow read: if request.auth != null && request.auth.uid == userId;
+      
+      // Users can create/update their own data (including encrypted wallet)
+      allow create, update: if request.auth != null && 
+                               request.auth.uid == userId &&
+                               request.resource.data.keys().hasAll(['walletAddress']) &&
+                               request.resource.data.walletAddress is string;
+      
+      // No deletions allowed
+      allow delete: if false;
+    }
+    
+    // Investments collection
+    match /investments/{investmentId} {
+      // Users can read their own investments
+      allow read: if request.auth != null && 
+                     request.auth.uid == resource.data.userId;
+      
+      // Users can create their own investments
+      allow create: if request.auth != null && 
+                       request.auth.uid == request.resource.data.userId;
+      
+      // Users can update their own investments
+      allow update: if request.auth != null && 
+                       request.auth.uid == resource.data.userId;
+      
+      // No deletions allowed from client
+      allow delete: if false;
+    }
+    
+    // Transactions collection
+    match /transactions/{transactionId} {
+      // Users can read their own transactions
+      allow read: if request.auth != null && 
+                     request.auth.uid == resource.data.userId;
+      
+      // Users can create their own transactions
+      allow create: if request.auth != null && 
+                       request.auth.uid == request.resource.data.userId;
+      
+      // No updates or deletions allowed
+      allow update, delete: if false;
+    }
+    
+    // Default deny for all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

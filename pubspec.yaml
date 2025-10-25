@@ -1,0 +1,63 @@
+name: pumpfunds
+description: A cross-platform mobile app for investing in curated Solana funds with real-time copy-trading
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # State Management
+  flutter_bloc: ^8.1.3
+  equatable: ^2.0.5
+  
+  # Solana & Web3
+  solana: ^0.30.3
+  web3dart: ^2.7.1
+  bip39: ^1.0.6
+  ed25519_hd_key: ^2.2.0
+  hex: ^0.2.0
+  
+  # Firebase
+  firebase_core: ^3.7.0
+  firebase_auth: ^5.3.3
+  cloud_firestore: ^5.5.0
+  firebase_messaging: ^15.1.5
+  
+  # Storage & Security
+  flutter_secure_storage: ^9.0.0
+  shared_preferences: ^2.2.2
+  encrypt: ^5.0.3
+  sodium_libs: ^3.4.5+2
+  
+  # UI & Charts
+  fl_chart: ^0.66.0
+  shimmer: ^3.0.0
+  flutter_svg: ^2.0.9
+  qr_flutter: ^4.1.0
+  
+  # HTTP & API
+  http: ^1.1.2
+  dio: ^5.4.0
+  
+  # Utils
+  intl: ^0.18.1
+  url_launcher: ^6.2.2
+  # qr_code_scanner: ^1.0.1  # Removed due to namespace issues
+  # image_picker: ^1.0.7  # Removed due to namespace issues
+  
+  # WalletConnect
+  walletconnect_dart: ^0.0.11
+  
+  # Icons
+  cupertino_icons: ^1.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

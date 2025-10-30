@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "update-roi": "node cron/update-roi.js",
+    "update-roi": "node trigger-roi-update.js",
     "admin": "node admin-cli.js",
     "test": "node test-copy-trading.js"
   },

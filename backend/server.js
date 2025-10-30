@@ -501,10 +501,9 @@ async function calculateFundRoi(walletAddresses) {
   return successCount > 0 ? totalRoi / successCount : 0;
 }
 
-// Update all funds ROI with historical data
+// Update all funds ROI with historical data using Solana Tracker API
 async function updateAllFundsRoi() {
-  console.log('🔄 Running ROI update for all funds...');
-  const axios = require('axios');
+  console.log('🔄 Running ROI update for all funds using Solana Tracker API...');
   const fundsSnapshot = await db.collection('funds').get();
 
   for (const fundDoc of fundsSnapshot.docs) {
@@ -515,96 +514,178 @@ async function updateAllFundsRoi() {
       continue;
     }
 
-    const { roi7d, roiHistory } = await calculateFundRoiWithHistory(fundDoc.id, fund.walletAddresses);
+    const { roi7d, roiHistory } = await calculateFundRoiFromSolanaTracker(fundDoc.id, fund.walletAddresses);
 
-    // Update fund
+    // Update fund with new ROI data
     await db.collection('funds').doc(fundDoc.id).update({
       roi7d,
       roiHistory,
       lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    // Store daily ROI snapshot for historical tracking
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    await db.collection('funds').doc(fundDoc.id).collection('roiSnapshots').doc(today).set({
+      roi: roi7d,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      walletCount: fund.walletAddresses.length,
+    }, { merge: true });
+
     console.log(`✅ Updated ROI for fund ${fund.name} (${fundDoc.id}): ${roi7d.toFixed(2)}%`);
-    console.log(`   📈 Daily ROI: ${roiHistory.join(', ')}`);
+    console.log(`   📈 7-Day ROI History: [${roiHistory.map(r => r.toFixed(2)).join(', ')}]`);
   }
 
   console.log('✅ ROI update completed for all funds');
 }
 
-// Calculate fund ROI with 7-day history
-async function calculateFundRoiWithHistory(fundId, walletAddresses) {
+// Helper function to delay execution
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Calculate fund ROI using Solana Tracker API with 7-day history
+async function calculateFundRoiFromSolanaTracker(fundId, walletAddresses) {
   try {
-    console.log(`\n📊 Calculating ROI for fund: ${fundId}`);
+    console.log(`\n📊 Calculating ROI from Solana Tracker for fund: ${fundId}`);
+    console.log(`   Tracking ${walletAddresses.length} wallets`);
 
-    // Get all transactions for this fund's wallets from the last 7 days
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    // Fetch PNL data from Solana Tracker for each wallet
+    let totalRoi = 0;
+    let successCount = 0;
+    const walletRois = [];
 
-    const transactionsSnapshot = await db.collection('transactions')
-      .where('fundWallet', 'in', walletAddresses)
-      .where('timestamp', '>=', admin.firestore.Timestamp.fromDate(sevenDaysAgo))
-      .orderBy('timestamp', 'asc')
-      .get();
+    for (let i = 0; i < walletAddresses.length; i++) {
+      const walletAddress = walletAddresses[i];
+      
+      // Add delay between requests to avoid rate limiting (1 second)
+      if (i > 0) {
+        await delay(1000);
+      }
+      
+      try {
+        console.log(`   Fetching PNL for wallet ${i + 1}/${walletAddresses.length}: ${walletAddress.substring(0, 8)}...`);
+        
+        // Retry logic with exponential backoff
+        let retries = 0;
+        let maxRetries = 3;
+        let response = null;
+        
+        while (retries < maxRetries) {
+          try {
+            // Correct API format: /pnl/{wallet} with query params
+            response = await axios.get(
+              `https://data.solanatracker.io/pnl/${walletAddress}`,
+              { 
+                params: {
+                  period: true,
+                  summary: true
+                },
+                timeout: 15000,
+                headers: {
+                  'x-api-key': process.env.SOLANA_TRACKER_API_KEY || ''
+                }
+              }
+            );
+            break; // Success, exit retry loop
+          } catch (err) {
+            retries++;
+            if (err.response?.status === 429 && retries < maxRetries) {
+              const waitTime = Math.pow(2, retries) * 2000; // Exponential backoff: 4s, 8s, 16s
+              console.log(`   ⏳ Rate limited, waiting ${waitTime/1000}s before retry ${retries}/${maxRetries}...`);
+              await delay(waitTime);
+            } else if (err.response?.status === 500 && retries < maxRetries) {
+              console.log(`   ⏳ Server error, retrying in 3s (${retries}/${maxRetries})...`);
+              await delay(3000);
+            } else {
+              throw err; // Max retries reached or other error
+            }
+          }
+        }
 
-    console.log(`   Found ${transactionsSnapshot.size} transactions in last 7 days`);
-
-    if (transactionsSnapshot.empty) {
-      console.log(`   ⚠️  No transactions found, setting ROI to 0`);
-      return { roi7d: 0, roiHistory: [0, 0, 0, 0, 0, 0, 0] };
+        // Calculate ROI from PnL data
+        if (response && response.data) {
+          const summary = response.data.summary || response.data;
+          
+          // ROI = (total profit / total invested) * 100
+          let walletRoi = 0;
+          
+          if (summary) {
+            // Use 7d data if available, otherwise use overall data
+            const total = summary['7d']?.total || summary.total || 0;
+            const invested = summary['7d']?.totalInvested || summary.totalInvested || 0;
+            
+            if (invested > 0) {
+              walletRoi = (total / invested) * 100;
+            } else if (total > 0) {
+              // If no investment tracked but has profit, it might be 100% ROI or invalid data
+              // For now, skip wallets with no cost basis
+              walletRoi = 0;
+            }
+          }
+          
+          walletRois.push(walletRoi);
+          totalRoi += walletRoi;
+          successCount++;
+          console.log(`   \u2713 Wallet ROI: ${walletRoi.toFixed(2)}% (invested: $${summary?.totalInvested?.toFixed(2) || 0}, profit: $${summary?.total?.toFixed(2) || 0})`);
+        } else {
+          console.log(`   ⚠️  Invalid PnL data for wallet`);
+          walletRois.push(0);
+        }
+      } catch (error) {
+        const statusCode = error.response?.status || 'unknown';
+        console.log(`   ⚠️  Failed to fetch wallet PNL (${statusCode}): ${error.message}`);
+        walletRois.push(0);
+      }
     }
 
-    // Group transactions by day
-    const dailyData = {};
-    
-    transactionsSnapshot.forEach(doc => {
-      const tx = doc.data();
-      const txDate = tx.timestamp.toDate();
-      const dayKey = txDate.toISOString().split('T')[0]; // YYYY-MM-DD
+    // Calculate average ROI across all wallets
+    const roi7d = successCount > 0 ? totalRoi / successCount : 0;
+    console.log(`   📊 Average Fund ROI: ${roi7d.toFixed(2)}% (${successCount}/${walletAddresses.length} wallets)`);
 
-      if (!dailyData[dayKey]) {
-        dailyData[dayKey] = { invested: 0, value: 0 };
-      }
-
-      if (tx.type === 'buy') {
-        dailyData[dayKey].invested += tx.totalValue || 0;
-      } else if (tx.type === 'sell') {
-        dailyData[dayKey].value += tx.totalValue || 0;
-      }
-    });
-
-    // Calculate cumulative ROI for each of the last 7 days
-    const roiHistory = [];
-    const today = new Date();
-    let totalInvested = 0;
-    let totalValue = 0;
-    
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(today);
-      date.setDate(date.getDate() - i);
-      const dayKey = date.toISOString().split('T')[0];
-
-      // Add today's data
-      if (dailyData[dayKey]) {
-        totalInvested += dailyData[dayKey].invested;
-        totalValue += dailyData[dayKey].value;
-      }
-
-      // Calculate cumulative ROI up to this day
-      const roi = totalInvested > 0 
-        ? ((totalValue - totalInvested) / totalInvested) * 100 
-        : 0;
-
-      roiHistory.push(parseFloat(roi.toFixed(2)));
-    }
-
-    // Overall 7-day ROI (last value in history)
-    const roi7d = roiHistory[roiHistory.length - 1] || 0;
+    // Get historical ROI snapshots from last 7 days
+    const roiHistory = await getHistoricalRoiSnapshots(fundId, roi7d);
 
     return { roi7d, roiHistory };
 
   } catch (error) {
-    console.error(`   ❌ Error calculating ROI:`, error);
+    console.error(`   ❌ Error calculating ROI from Solana Tracker:`, error.message);
     return { roi7d: 0, roiHistory: [0, 0, 0, 0, 0, 0, 0] };
+  }
+}
+
+// Get historical ROI snapshots for the last 7 days
+async function getHistoricalRoiSnapshots(fundId, currentRoi) {
+  try {
+    const roiHistory = [];
+    const today = new Date();
+
+    // Get snapshots for last 7 days
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      const dayKey = date.toISOString().split('T')[0]; // YYYY-MM-DD
+
+      // Try to get snapshot from database
+      const snapshotDoc = await db.collection('funds').doc(fundId)
+        .collection('roiSnapshots').doc(dayKey).get();
+
+      if (snapshotDoc.exists) {
+        const roi = snapshotDoc.data().roi || 0;
+        roiHistory.push(parseFloat(roi.toFixed(2)));
+      } else if (i === 0) {
+        // For today, use current ROI
+        roiHistory.push(parseFloat(currentRoi.toFixed(2)));
+      } else {
+        // No data for this day, use 0
+        roiHistory.push(0);
+      }
+    }
+
+    return roiHistory;
+  } catch (error) {
+    console.error(`   ⚠️  Error fetching historical ROI:`, error.message);
+    // Return array with current ROI as last value
+    return [0, 0, 0, 0, 0, 0, parseFloat(currentRoi.toFixed(2))];
   }
 }
 
@@ -1219,9 +1300,9 @@ async function sendFailureNotification(userId, errorMessage) {
 
 // ==================== CRON JOBS ====================
 
-// Update fund ROI every hour
-cron.schedule('0 * * * *', async () => {
-  console.log('🔄 Running scheduled ROI update cron job...');
+// Update fund ROI every 24 hours at midnight UTC
+cron.schedule('0 0 * * *', async () => {
+  console.log('🔄 Running scheduled daily ROI update cron job...');
   try {
     await updateAllFundsRoi();
   } catch (error) {

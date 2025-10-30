@@ -7,7 +7,8 @@ Node.js backend server for the PumpFunds copy trading platform.
 - 🔄 **Real-time Transaction Monitoring** - Polls Helius API for fund wallet transactions
 - ⚡ **Instant Copy Trading** - Executes trades for all investors within seconds
 - 🔐 **Wallet Encryption** - XChaCha20-Poly1305 encryption for private keys
-- 📊 **ROI Calculation** - Automatic daily ROI tracking for all funds
+- 📊 **ROI Calculation** - Automatic daily ROI tracking using Solana Tracker API (runs every 24 hours)
+- 📈 **Historical ROI** - Stores daily ROI snapshots for 7-day performance charts
 - 🧹 **Auto-Optimization** - Zero API costs when no active investments
 - 🔔 **Push Notifications** - Firebase Cloud Messaging for trade alerts
 
@@ -42,6 +43,7 @@ NODE_ENV=production
 BACKEND_URL=https://your-backend-url.com
 
 HELIUS_API_KEY=your_helius_api_key_here
+SOLANA_TRACKER_API_KEY=your_solana_tracker_api_key
 SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
 
 FIREBASE_PROJECT_ID=your_firebase_project_id
@@ -253,38 +255,47 @@ async function encryptPrivateKey(privateKey, pin) {
 
 ### 4. ROI Calculator
 
-**Purpose:** Calculate daily ROI for each fund.
+**Purpose:** Calculate daily ROI for each fund using real-time data from Solana Tracker API.
 
-**Schedule:** Every hour via cron job
+**Schedule:** Every 24 hours at midnight UTC via cron job
+
+**Data Source:** Solana Tracker API (`https://data.solanatracker.io/pnl/wallet`)
 
 **Calculation:**
 ```javascript
-async function calculateFundRoiWithHistory(fundId, walletAddresses) {
-  // Get transactions from last 7 days
-  const txs = await getTransactions(walletAddresses, 7days);
+async function calculateFundRoiFromSolanaTracker(fundId, walletAddresses) {
+  // Fetch real PNL data from Solana Tracker for each wallet
+  let totalRoi = 0;
+  let successCount = 0;
   
-  // Group by day
-  const dailyData = groupByDay(txs);
-  
-  // Calculate cumulative ROI for each day
-  const roiHistory = [];
-  let totalInvested = 0;
-  let totalValue = 0;
-  
-  for (let day = 0; day < 7; day++) {
-    totalInvested += dailyData[day].invested;
-    totalValue += dailyData[day].value;
+  for (const wallet of walletAddresses) {
+    const response = await axios.get(
+      `https://data.solanatracker.io/pnl/wallet?wallet=${wallet}&period=7d`
+    );
     
-    const roi = ((totalValue - totalInvested) / totalInvested) * 100;
-    roiHistory.push(roi);
+    if (response.data && typeof response.data.roi === 'number') {
+      totalRoi += response.data.roi;
+      successCount++;
+    }
   }
   
-  return {
-    roi7d: roiHistory[6],
-    roiHistory
-  };
+  // Calculate average ROI across all wallets
+  const roi7d = successCount > 0 ? totalRoi / successCount : 0;
+  
+  // Get historical snapshots from last 7 days
+  const roiHistory = await getHistoricalRoiSnapshots(fundId, roi7d);
+  
+  // Store today's snapshot in Firebase
+  await storeRoiSnapshot(fundId, roi7d);
+  
+  return { roi7d, roiHistory };
 }
 ```
+
+**Storage:**
+- Daily ROI snapshots stored in Firestore: `funds/{fundId}/roiSnapshots/{YYYY-MM-DD}`
+- 7-day history array stored in fund document for quick access
+- Historical data used to generate performance charts in the app
 
 ## Optimization Features
 

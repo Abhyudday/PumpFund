@@ -1,5 +1,11 @@
 # 🚀 PumpFunds - Solana Copy Trading Platform
 
+## 📱 **Download & Install APK**
+
+**🔗 [Download PumpFunds APK](https://www.dropbox.com/scl/fi/uq0dchn0dlkj7ccnr474u/app-release.apk?rlkey=ugmji7iyk65t5qiormt5b9gqr&st=2xc8861r&dl=0)**
+
+> **⚡ Quick Install:** Click the link above to download the latest PumpFunds app and start copy trading on Solana!
+
 ![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter)
 ![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js)
 ![Solana](https://img.shields.io/badge/Solana-Mainnet-9945FF?logo=solana)
